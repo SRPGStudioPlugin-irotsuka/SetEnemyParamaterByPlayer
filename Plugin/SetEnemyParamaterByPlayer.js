@@ -17,7 +17,7 @@
 
 【例】
 例1:プレイヤー id:5 のキャラをエネミーとして登場
-  {setEnemyParamByPlayer:true, srcUnit : {unitType : 'player', id : 5}}
+  {setEnemyParamByPlayer: {srcUnit : {unitType : 'player', id : 5}}
 
 例2:キーワード「key」を用いてキャラをエネミーとして登場させる場合
   元となるユニットのカスタムパラメータ：{srcUnitKeyWord : 'key'}
@@ -133,7 +133,7 @@ SRPG Studio Version:1.213
 		alias.call(this, unit);
 	}
 
-	// 敵も経験値を取得し成長させる場合
+	// 敵も経験値を取得し成長させる場合の処理
 	var alias2 = NormalAttackOrderBuilder._calculateExperience;
 	NormalAttackOrderBuilder._calculateExperience = function(virtualActive, virtualPassive) {
 		var unitSrc = this._attackInfo.unitSrc;
@@ -141,8 +141,9 @@ SRPG Studio Version:1.213
 		var data = StructureBuilder.buildAttackExperience();
 		
 		if (!this._isExperienceDisabled()) {
+			// 敵/同盟ユニットの経験値処理（生きているときのみ）
 			if (isSettingEnemyParam(unitSrc) && unitSrc.getUnitType() !== UnitType.PLAYER && virtualActive.hp > 0) {
-				// 攻撃をしかけたのが自軍ではなく、さらに死亡していない場合の処理
+				// 攻撃側の経験値処理用のデータ
 				data.active = unitSrc;
 				data.activeHp = virtualActive.hp;
 				data.activeDamageTotal = virtualActive.damageTotal;
@@ -150,7 +151,7 @@ SRPG Studio Version:1.213
 				data.passiveHp = virtualPassive.hp;
 				data.passiveDamageTotal = virtualPassive.damageTotal;
 			} else if (isSettingEnemyParam(unitDest) && unitDest.getUnitType() !== UnitType.PLAYER && virtualPassive.hp > 0) {
-				// 攻撃を受けたのが自軍ではなく、さらに死亡していない場合の処理
+				// 防衛側の場合の経験値処理用のデータ
 				data.active = unitDest;
 				data.activeHp = virtualPassive.hp;
 				data.activeDamageTotal = virtualPassive.damageTotal;
@@ -164,28 +165,22 @@ SRPG Studio Version:1.213
 				// 経験値の計算，成長
 				var exp = ExperienceCalculator.calculateExperience(data);
 				ExperienceControl.directGrowth(data.active, exp);
-
-				// 元となったデータに成長を反映
-				var original = getSrcUnit(data.active);
-
-				if (typeof original !== 'number') {
-					syncUnitData(original, data.active);
-				}
 			}
 		
 			return alias2.call(this, virtualActive, virtualPassive);
 		}
 	}
 
-	// 敵の経験値を元となるユニットの成長率を用いて計算
+	// 獲得経験値計算
 	var alias3 = ExperienceControl.obtainExperience;
 	ExperienceControl.obtainExperience = function(unit, getExp) {
-		// 元の成長率をもとに経験値加算処理
 		if (isSettingEnemyParam(unit) && isGrowthUnit(unit)) {
+			// 敵のユニットの場合、コピー元のユニットの成長率をもとに経験値加算処理
 			var growthArray;
 
 			// 経験値加算
 			if (!this._addExperience(unit, getExp)) {
+				// 成長しない場合は終了
 				return null;
 			}
 
@@ -204,10 +199,12 @@ SRPG Studio Version:1.213
 		return alias3.call(this, unit, getExp);
 	}
 	
-	// 敵の経験値を元となるユニットの成長率を用いて計算
+	// 成長
 	var alias4 = ExperienceControl.directGrowth;
 	ExperienceControl.directGrowth = function(unit, getExp) {
+		// 敵を成長させる場合
 		if (isSettingEnemyParam(unit) && isGrowthUnit(unit)) {
+			// 元となるユニットの成長率を用いて経験値を計算
 			var growthArray = this.obtainExperience(unit, getExp);
 
 			if (growthArray !== null) {
@@ -221,31 +218,67 @@ SRPG Studio Version:1.213
 		alias4.call(this, unit, getExp);
 	}
 
+	var alias5 = NormalAttackOrderBuilder._endVirtualAttack;
+	NormalAttackOrderBuilder._endVirtualAttack = function(virtualActive, virtualPassive){
+		alias5.call(this, virtualActive, virtualPassive);
+
+		// 経験値、耐久値減少後に計算後に値のコピーを行う
+		if (isSettingEnemyParam(virtualActive.unitSelf)) {
+			var destUnit = getSrcUnit(virtualActive.unitSelf);
+
+			if (destUnit !== null) {
+				syncUnitData(destUnit, virtualActive.unitSelf);
+			}
+		}
+
+		if (isSettingEnemyParam(virtualPassive.unitSelf)) {
+			var destUnit = getSrcUnit(virtualPassive.unitSelf);
+
+			if (destUnit !== null) {
+				syncUnitData(destUnit, virtualPassive.unitSelf);
+			}
+		}
+	}
+
+	// 耐久値減少時の値コピー
+	var alias6 = ItemControl.decreaseLimit;
+	ItemControl.decreaseLimit = function(unit, item) {
+		alias6.call(this, unit, item);
+
+		// 経験値、耐久値減少後に計算後に値のコピーを行う
+		if (isSettingEnemyParam(unit)) {
+			var destUnit = getSrcUnit(unit);
+
+			if (destUnit !== null) {
+				syncUnitData(destUnit, unit);
+			}
+		}
+	}
+
 	// 他のユニットのパラメータで上書きする機能を使用するか
 	isSettingEnemyParam = function(unit) {
-		return typeof unit.custom.setEnemyParamByPlayer === 'boolean' &&
-	     	   unit.custom.setEnemyParamByPlayer;
+		return unit.custom.setEnemyParamByPlayer !== undefined;
 	}
 
 	// unit を成長させるか
 	isGrowthUnit = function(unit) {
 		return isEnemyGrowthDefault ||
-			   (typeof unit.custom.isEnemyGrowth === 'boolean' &&
-			    unit.custom.isEnemyGrowth);
+			   (typeof unit.custom.setEnemyParamByPlayer.isEnemyGrowth === 'boolean' &&
+			    unit.custom.setEnemyParamByPlayer.isEnemyGrowth);
 	}
 
 	// unit を削除扱いとするか
 	isEraseUnit = function(unit) {
 		return notFoundSrcUnitDefault === 'erase' ||
-			   (typeof unit.custom.notFoundSrcUnit === 'string' &&
-			   unit.custom.notFoundSrcUnit === 'erase');
+			   (typeof unit.custom.setEnemyParamByPlayer.notFoundSrcUnit === 'string' &&
+			   unit.custom.setEnemyParamByPlayer.notFoundSrcUnit === 'erase');
 	}
 
 	// 元のユニットと同時に存在することを許すか
 	isAllowDoppergengar = function(unit) {
 		return isAllowDopperDefault === 'erase' ||
-			   (typeof unit.custom.isAllowDopper === 'boolean' &&
-			   unit.custom.isAllowDopper === 'erase');
+			   (typeof unit.custom.setEnemyParamByPlayer.isAllowDopper === 'boolean' &&
+			   unit.custom.setEnemyParamByPlayer.isAllowDopper === 'erase');
 	}
 	
 	/*
@@ -253,21 +286,21 @@ SRPG Studio Version:1.213
 	 * 返り値はデスティネーションユニット / 見つからない場合は -1 を返す
 	 */
 	getSrcUnit = function(destUnit) {
-		//
-		if (destUnit.custom.srcUnit === undefined) {
-			return -1;
+		// 元のユニットが定義されていない場合は何もしない
+		if (destUnit.custom.setEnemyParamByPlayer.srcUnit === undefined) {
+			return null;
 		}
 
 		// 探すために必要なユニットのリストを選択
 		var list;
 
-		if (destUnit.custom.srcUnit.unitType === 'player') {
+		if (destUnit.custom.setEnemyParamByPlayer.srcUnit.unitType === 'player') {
 			list = PlayerList.getMainList();
-		} else if (destUnit.custom.srcUnit.unitType === 'ally') {
+		} else if (destUnit.custom.setEnemyParamByPlayer.srcUnit.unitType === 'ally') {
 			list = AllyList.getMainList();
-		} else if (destUnit.custom.srcUnit.unitType === 'enemy') {
+		} else if (destUnit.custom.setEnemyParamByPlayer.srcUnit.unitType === 'enemy') {
 			list = EnemyList.getMainList();
-		} else if (destUnit.custom.srcUnit.unitType === 'all') {
+		} else if (destUnit.custom.setEnemyParamByPlayer.srcUnit.unitType === 'all') {
 			list = AllUnitList.getList();
 		} else {
 			// デフォルトは PlayerList を参照
@@ -276,8 +309,9 @@ SRPG Studio Version:1.213
 
 		listSize = list.getCount();
 
-		if (typeof destUnit.custom.srcUnit.id === 'number') {
-			unitId = destUnit.custom.srcUnit.id;
+		if (typeof destUnit.custom.setEnemyParamByPlayer.srcUnit.id === 'number') {
+			// ユニット id を元に検索
+			unitId = destUnit.custom.setEnemyParamByPlayer.srcUnit.id;
 
 			for (i = 0; i < listSize; i++) {
 				var srcUnit = list.getData(i);
@@ -288,7 +322,8 @@ SRPG Studio Version:1.213
 			}
 
 			return -1;
-		} else if (typeof destUnit.custom.srcUnit.name === 'string') {
+		} else if (typeof destUnit.custom.setEnemyParamByPlayer.srcUnit.name === 'string') {
+			// ユニット名を元に検索
 			unitName = destUnit.custom.srcUnit.name;
 
 			for (i = 0; i < listSize; i++) {
@@ -299,32 +334,35 @@ SRPG Studio Version:1.213
 				}
 			}
 
-			return -1;
-		} else if (typeof destUnit.custom.srcUnit.keyWord === 'string') {
-			unitKeyWord = destUnit.custom.srcUnit.keyWord;
+			return null;
+		} else if (typeof destUnit.custom.setEnemyParamByPlayer.srcUnit.keyWord === 'string') {
+			// 設定したキーワードを元に検索
+			unitKeyWord = destUnit.custom.setEnemyParamByPlayer.srcUnit.keyWord;
 
 			for (i = 0; i < listSize; i++) {
 				var srcUnit = list.getData(i);
 	
-				if (srcUnit.custom.srcUnitKeyWord == unitKeyWord) {
+				if (srcUnit.custom.setEnemyParamByPlayer.srcUnitKeyWord == unitKeyWord) {
 					return srcUnit;
 				}
 			}
 
 			return -1;
-		} else if (typeof destUnit.custom.srcUnit.pos === 'number') {
-			unitPos = destUnit.custom.srcUnit.pos;
+		} else if (typeof destUnit.custom.setEnemyParamByPlayer.srcUnit.pos === 'number') {
+			// 出撃順を元に検索
+			unitPos = destUnit.custom.setEnemyParamByPlayer.srcUnit.pos;
 	
 			if (unitPos < listSize) {
 				return list.getData(unitPos);
 			}
 
-			return -1;
-		} else if (typeof destUnit.custom.srcUnit.param === 'string') {
-			return -1;
+			return null;
+		} else if (typeof destUnit.custom.setEnemyParamByPlayer.srcUnit.param === 'string') {
+			// パラメータ状態を元に検索
+			return null;
 		}
 
-		return -1;
+		return null;
 	}
 
 	/*
@@ -344,17 +382,20 @@ SRPG Studio Version:1.213
 			ParamGroup.setUnitValue(destUnit, i, param);
 		}
 
-		// Item : なんだかエラーで落ちる？
-		/*
+		// Item
 		var itemCount = DataConfig.getMaxUnitItemCount();
 		for (i = 0; i < itemCount; i++) {
-			destUnit.clearItem(i);
-			destUnit.setItem(i, srcUnit.getItem(i));
+			var org_item = srcUnit.getItem(i);
+			if (org_item === null) {
+				// アイテムがなくなった時点で終了
+				break;
+			}
+			destUnit.clearItem(i); // 一旦アイテムを消す
+			destUnit.setItem(i, root.duplicateItem(org_item)); // アイテムをコピー
 		}
-		*/
-		
+
 		// HP
-		//destUnit.setHp(srcUnit.getHp())
+		destUnit.setHp(srcUnit.getHp())
 		// MAX HP を越した場合の処理がいるかも？
 
 		// Lv
@@ -367,23 +408,23 @@ SRPG Studio Version:1.213
 		destUnit.setClass(srcUnit.getClass());
 
 		// 名前
-		//destUnit.setName(srcUnit.getName());
+		destUnit.setName(srcUnit.getName());
 
 		// 説明文
-		//destUnit.setDescription(srcUnit.getDescription());
+		destUnit.setDescription(srcUnit.getDescription());
 
 		// 顔画像
-		//destUnit.setFaceResourceHandle(srcUnit.getFaceResourceHandle());
+		destUnit.setFaceResourceHandle(srcUnit.getFaceResourceHandle());
 
 		// 重要度
-		//destUnit.setImportance(srcUnit.getImportance());
+		destUnit.setImportance(srcUnit.getImportance());
 
 		// クラスグループ
-		//destUnit.setClassGroupId1(srcUnit.getClassGroupId1());
-		//destUnit.setClassGroupId2(srcUnit.getClassGroupId2());
+		destUnit.setClassGroupId1(srcUnit.getClassGroupId1());
+		destUnit.setClassGroupId2(srcUnit.getClassGroupId2());
 
 		// クラスチェンジの回数
-		//destUnit.setClassUpCount(srcUnit.getClassUpCount());
+		destUnit.setClassUpCount(srcUnit.getClassUpCount());
 	}
 
 	/*
@@ -403,17 +444,20 @@ SRPG Studio Version:1.213
 			ParamGroup.setUnitValue(destUnit, i, param);
 		}
 
-		// Item : 
-		/*
+		// アイテムの情報をコピー
 		var itemCount = DataConfig.getMaxUnitItemCount();
 		for (i = 0; i < itemCount; i++) {
-			destUnit.clearItem(i);
-			destUnit.setItem(i, srcUnit.getItem(i));
+			var org_item = srcUnit.getItem(i);
+			if (org_item === null) {
+				// アイテムがなくなった時点で終了
+				break;
+			}
+			destUnit.clearItem(i); // 一旦アイテムを消す
+			destUnit.setItem(i, root.duplicateItem(org_item)); // アイテムをコピー
 		}
-		*/
 		
 		// HP
-		//destUnit.setHp(srcUnit.getHp())
+		destUnit.setHp(srcUnit.getHp())
 		// MAX HP を越した場合の処理がいるかも？
 
 		// Lv
@@ -421,27 +465,5 @@ SRPG Studio Version:1.213
 
 		// 経験値
 		destUnit.setExp(srcUnit.getExp());
-
-		// クラス
-		//destUnit.setClass(srcUnit.getClass());
-
-		// 名前
-		//destUnit.setName(srcUnit.getName());
-
-		// 説明文
-		//destUnit.setDescription(srcUnit.getDescription());
-
-		// 顔画像
-		//destUnit.setFaceResourceHandle(srcUnit.getFaceResourceHandle());
-
-		// 重要度
-		//destUnit.setImportance(srcUnit.getImportance());
-
-		// クラスグループ
-		//destUnit.setClassGroupId1(srcUnit.getClassGroupId1());
-		//destUnit.setClassGroupId2(srcUnit.getClassGroupId2());
-
-		// クラスチェンジの回数
-		//destUnit.setClassUpCount(srcUnit.getClassUpCount());
 	}
 })();
